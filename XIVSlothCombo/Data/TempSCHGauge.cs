@@ -2,8 +2,10 @@
 using Dalamud.Game.ClientState.JobGauge.Types;
 using ECommons.DalamudServices;
 using System;
+using System.Diagnostics.Contracts;
 using System.Runtime.InteropServices;
 using XIVSlothCombo.Services;
+using XIVSlothCombo.Window.Tabs;
 
 namespace XIVSlothCombo.Data;
 
@@ -24,27 +26,26 @@ public unsafe class TmpSCHGauge
         Struct = (TmpScholarGauge*)Service.JobGauges.Get<SCHGauge>().Address;
     }
 }
-public unsafe class TmpVPRGauge
+
+public unsafe class TmpPCTGauge
 {
-    public byte RattlingCoilStacks => Struct->RattlingCoilStacks;
+    public byte PalleteGauge => Struct->PalleteGauge;
 
-    public byte SerpentsOfferings => Struct->SerpentsOfferings;
+    public byte Paint => Struct->Paint;
 
-    public byte AnguineTribute => Struct->AnguineTribute;
+    public bool CreatureMotifDrawn => Struct->CreatureMotifDrawn;
 
-    public bool DreadwinderReady => Struct->DreadwinderReady;
+    public bool WeaponMotifDrawn => Struct->WeaponMotifDrawn;
 
-    public bool HuntersCoilReady => Struct->HuntersCoilReady;
+    public bool LandscapeMotifDrawn => Struct->LandscapeMotifDrawn;
 
-    public bool SwiftskinsCoilReady => Struct->SwiftskinsCoilReady;
+    public bool MooglePortraitReady => Struct->MooglePortraitReady;
 
-    public bool PitOfDreadReady => Struct->PitOfDreadReady;
+    public bool MadeenPortraitReady => Struct->MadeenPortraitReady;
 
-    public bool HuntersDenReady => Struct->HuntersDenReady;
+    public CreatureFlags Flags => Struct->CreatureFlags;
 
-    public bool SwiftskinsDenReady => Struct->SwiftskinsDenReady;
-
-    private protected ViperGauge* Struct;
+    private protected PictoGauge* Struct;
 
     public byte GetOffset(int offset)
     {
@@ -53,10 +54,10 @@ public unsafe class TmpVPRGauge
     }
 
     private nint Address;
-    public TmpVPRGauge()
+    public TmpPCTGauge()
     {
         Address = Svc.SigScanner.GetStaticAddressFromSig("48 8B 3D ?? ?? ?? ?? 33 ED") + 0x8;
-        Struct = (ViperGauge*)Address;
+        Struct = (PictoGauge*)Address;
     }
 }
 
@@ -70,31 +71,39 @@ public struct TmpScholarGauge
 }
 
 [StructLayout(LayoutKind.Explicit, Size = 0x10)]
-public struct ViperGauge
+public struct PictoGauge
 {
-    [FieldOffset(0x08)] public byte RattlingCoilStacks;
-    [FieldOffset(0x0A)] public byte SerpentsOfferings;
-    [FieldOffset(0x09)] public byte AnguineTribute;
-    [FieldOffset(0x0B)] public DreadwinderPitFlags DreadwinderPitCombo;
+    [FieldOffset(0x08)] public byte PalleteGauge;
+    [FieldOffset(0x0A)] public byte Paint;
+    [FieldOffset(0x0B)] public CanvasFlags CanvasFlags;
+    [FieldOffset(0x0C)] public CreatureFlags CreatureFlags;
 
-    public bool DreadwinderReady => DreadwinderPitCombo.HasFlag(DreadwinderPitFlags.Dreadwinder);
-    public bool HuntersCoilReady => DreadwinderPitCombo.HasFlag(DreadwinderPitFlags.HuntersCoil);
-    public bool SwiftskinsCoilReady => DreadwinderPitCombo.HasFlag(DreadwinderPitFlags.SwiftskinsCoil);
-    public bool PitOfDreadReady => DreadwinderPitCombo.HasFlag(DreadwinderPitFlags.PitOfDread);
-    public bool HuntersDenReady => DreadwinderPitCombo.HasFlag(DreadwinderPitFlags.HuntersDen);
-    public bool SwiftskinsDenReady => DreadwinderPitCombo.HasFlag(DreadwinderPitFlags.SwiftskinsDen);
+    public bool CreatureMotifDrawn => CanvasFlags.HasFlag(CanvasFlags.Pom) || CanvasFlags.HasFlag(CanvasFlags.Wing) || CanvasFlags.HasFlag(CanvasFlags.Claw) || CanvasFlags.HasFlag(CanvasFlags.Maw);
+    public bool WeaponMotifDrawn => CanvasFlags.HasFlag(CanvasFlags.Weapon);
+    public bool LandscapeMotifDrawn => CanvasFlags.HasFlag(CanvasFlags.Landscape);
+    public bool MooglePortraitReady => CreatureFlags.HasFlag(CreatureFlags.MooglePortrait);
+    public bool MadeenPortraitReady => CreatureFlags.HasFlag(CreatureFlags.MadeenPortrait);
 
 }
-
 
 [Flags]
-public enum DreadwinderPitFlags : byte
+public enum CanvasFlags : byte
 {
-    Dreadwinder = 1,
-    HuntersCoil = 2,
-    SwiftskinsCoil = 3,
-    PitOfDread = 4,
-    HuntersDen = 5,
-    SwiftskinsDen = 6
+    Pom = 1,
+    Wing = 2,
+    Claw = 4,
+    Maw = 8,
+    Weapon = 16,
+    Landscape = 32,
 }
 
+[Flags]
+public enum CreatureFlags : byte
+{
+    Pom = 1,
+    Wings = 2,
+    Claw = 4,
+   
+    MooglePortrait = 16,
+    MadeenPortrait = 32,
+}

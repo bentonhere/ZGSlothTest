@@ -1,7 +1,8 @@
-﻿using XIVSlothCombo.Combos.JobHelpers;
+using Dalamud.Game.ClientState.JobGauge.Enums;
+using Dalamud.Game.ClientState.JobGauge.Types;
+using XIVSlothCombo.Combos.JobHelpers;
 using XIVSlothCombo.CustomComboNS;
 using XIVSlothCombo.CustomComboNS.Functions;
-using XIVSlothCombo.Data;
 
 namespace XIVSlothCombo.Combos.PvE
 {
@@ -93,11 +94,20 @@ namespace XIVSlothCombo.Combos.PvE
         public static class Config
         {
             public static UserInt
-                VPR_NoxiousRefreshRange = new("VPR_NoxiousRefreshRange"),
-                VPR_ST_SecondWind_Threshold = new("VPR_ST_SecondWindThreshold"),
-                VPR_ST_Bloodbath_Threshold = new("VPR_ST_BloodbathThreshold"),
-                VPR_AoE_SecondWind_Threshold = new("VPR_AoE_SecondWindThreshold"),
-                VPR_AoE_Bloodbath_Threshold = new("VPR_AoE_BloodbathThreshold");
+                VPR_ST_SecondWind_Threshold = new("VPR_ST_SecondWindThreshold", 25),
+                VPR_ST_Bloodbath_Threshold = new("VPR_ST_BloodbathThreshold", 40),
+                VPR_AoE_SecondWind_Threshold = new("VPR_AoE_SecondWindThreshold", 25),
+                VPR_AoE_Bloodbath_Threshold = new("VPR_AoE_BloodbathThreshold", 40),
+                VPR_ST_UncoiledFury_HoldCharges = new("VPR_ST_UncoiledFury_HoldCharges", 1),
+                VPR_AoE_UncoiledFury_HoldCharges = new("VPR_AoE_UncoiledFury_HoldCharges", 0),
+                VPR_Positional = new("VPR_Positional"),
+                VPR_ReawakenLegacyButton = new("VPR_ReawakenLegacyButton");
+
+            public static UserFloat
+                VPR_ST_Reawaken_Usage = new("VPR_ST_Reawaken_Usage", 2),
+                VPR_AoE_Reawaken_Usage = new("VPR_AoE_Reawaken_Usage", 2),
+                VPR_ST_NoxiousDebuffRefresh = new("VPR_ST_NoxiousDebuffRefresh", 20.0f),
+                VPR_AoE_NoxiousDebuffRefresh = new("VPR_AoE_NoxiousDebuffRefresh", 20.0f);
         }
 
         internal class VPR_ST_SimpleMode : CustomCombo
@@ -107,32 +117,45 @@ namespace XIVSlothCombo.Combos.PvE
 
             protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
             {
-                var gauge = new TmpVPRGauge();
-                bool trueNorthReady = TargetNeedsPositionals() && ActionReady(All.TrueNorth) && !HasEffect(All.Buffs.TrueNorth) && !IsMoving && CanWeave(actionID);
-                int NoxiousRefreshRange = Config.VPR_NoxiousRefreshRange;
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+                bool trueNorthReady = TargetNeedsPositionals() && ActionReady(All.TrueNorth) && !HasEffect(All.Buffs.TrueNorth) && CanWeave(actionID);
+                bool DreadwinderReady = gauge.DreadCombo == DreadCombo.Dreadwinder;
+                bool HuntersCoilReady = gauge.DreadCombo == DreadCombo.HuntersCoil;
+                bool SwiftskinsCoilReady = gauge.DreadCombo == DreadCombo.SwiftskinsCoil;
 
                 if (actionID is SteelFangs)
                 {
                     // Opener for VPR
-                    if (VPROpener.DoFullOpener(ref actionID, false))
+                    if (VPROpener.DoFullOpener(ref actionID, true))
                         return actionID;
 
+                    // Uncoiled combo
+                    if (HasEffect(Buffs.PoisedForTwinfang))
+                        return OriginalHook(Twinfang);
+
+                    if (HasEffect(Buffs.PoisedForTwinblood))
+                        return OriginalHook(Twinblood);
+
                     if (LevelChecked(WrithingSnap) && !InMeleeRange() && HasBattleTarget())
-                        return WrithingSnap;
+                        return gauge.HasRattlingCoilStack()
+                            ? UncoiledFury
+                            : WrithingSnap;
 
                     //Overcap protection
-                    if (HasCharges(Dreadwinder) &&
+                    if ((HasCharges(Dreadwinder) || ActionReady(SerpentsIre)) &&
                         ((gauge.RattlingCoilStacks is 3 && TraitLevelChecked(Traits.EnhancedVipersRattle)) ||
                         (gauge.RattlingCoilStacks is 2 && !TraitLevelChecked(Traits.EnhancedVipersRattle))))
                         return UncoiledFury;
 
                     //Serpents Ire usage
-                    if (ActionReady(SerpentsIre) && CanWeave(actionID))
+                    if (CanWeave(actionID) && gauge.RattlingCoilStacks <= 2 && !HasEffect(Buffs.Reawakened) &&
+                        ((LevelChecked(SerpentsIre) && GetCooldownRemainingTime(SerpentsIre) <= GetCooldownRemainingTime(OriginalHook(DreadFangs)) + 0.25) || ActionReady(SerpentsIre)))
                         return SerpentsIre;
 
                     //Reawaken combo
                     if (HasEffect(Buffs.Reawakened))
                     {
+                        //Pre Ouroboros
                         if (!TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                         {
                             if (gauge.AnguineTribute is 4)
@@ -148,10 +171,11 @@ namespace XIVSlothCombo.Combos.PvE
                                 return OriginalHook(SwiftskinsCoil);
                         }
 
+                        //With Ouroboros
                         if (TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                         {
                             //Legacy weaves
-                            if (TraitLevelChecked(Traits.EnhancedSerpentsLineage) && CanWeave(actionID) &&
+                            if (TraitLevelChecked(Traits.SerpentsLegacy) && CanWeave(actionID) &&
                                 (WasLastAction(OriginalHook(SteelFangs)) || WasLastAction(OriginalHook(DreadFangs)) ||
                                 WasLastAction(OriginalHook(HuntersCoil)) || WasLastAction(OriginalHook(SwiftskinsCoil))))
                                 return OriginalHook(SerpentsTail);
@@ -173,70 +197,69 @@ namespace XIVSlothCombo.Combos.PvE
                         }
                     }
 
-                    // Uncoiled Fury usage
-                    if (LevelChecked(UncoiledFury) && gauge.HasRattlingCoilStack())
-                        return UncoiledFury;
-
-                    // Uncoiled follow-ups
-                    if (WasLastWeaponskill(UncoiledFury))
-                    {
-                        if (HasEffect(Buffs.PoisedForTwinfang))
-                            return OriginalHook(Twinfang);
-
-                        if (HasEffect(Buffs.PoisedForTwinblood))
-                            return OriginalHook(Twinblood);
-                    }
-
-                    // Dreadwinder usage
                     // Dreadwinder combo
-                    if (WasLastWeaponskill(HuntersCoil) || WasLastWeaponskill(SwiftskinsCoil))
-                    {
-                        if (HasEffect(Buffs.HuntersVenom))
-                            return OriginalHook(Twinfang);
 
-                        if (HasEffect(Buffs.SwiftskinsVenom))
-                            return OriginalHook(Twinblood);
+                    if (HasEffect(Buffs.HuntersVenom))
+                        return OriginalHook(Twinfang);
+
+                    if (HasEffect(Buffs.SwiftskinsVenom))
+                        return OriginalHook(Twinblood);
+
+                    if (SwiftskinsCoilReady)
+                    {
+                        if (trueNorthReady && !OnTargetsFlank())
+                            return All.TrueNorth;
+
+                        return HuntersCoil;
                     }
 
-                    if (WasLastWeaponskill(SwiftskinsCoil))
-                        return HuntersCoil;
+                    if (DreadwinderReady)
+                    {
+                        if (trueNorthReady && !OnTargetsRear())
+                            return All.TrueNorth;
 
-                    if (gauge.DreadwinderReady && !WasLastWeaponskill(SwiftskinsCoil))
                         return SwiftskinsCoil;
+                    }
 
 
+                    // Uncoiled Fury usage
+                    if (LevelChecked(UncoiledFury) && gauge.RattlingCoilStacks > 1 &&
+                        !DreadwinderReady && !HuntersCoilReady && !SwiftskinsCoilReady &&
+                        !HasEffect(Buffs.SwiftskinsVenom) && !HasEffect(Buffs.HuntersVenom) &&
+                        HasEffect(Buffs.Swiftscaled) && HasEffect(Buffs.HuntersInstinct))
+                        return UncoiledFury;
 
                     //1-2-3 (4-5-6) Combo
                     if (comboTime > 0 && !HasEffect(Buffs.Reawakened))
                     {
                         if (lastComboMove is DreadFangs or SteelFangs)
                         {
-                            if (HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.FlanksbaneVenom))
+                            if ((HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.FlanksbaneVenom)) && LevelChecked(FlankstingStrike))
                                 return OriginalHook(SteelFangs);
 
-                            if (HasEffect(Buffs.HindstungVenom) || HasEffect(Buffs.HindsbaneVenom))
+                            if ((HasEffect(Buffs.HindstungVenom) || HasEffect(Buffs.HindsbaneVenom)) && LevelChecked(HindstingStrike))
                                 return OriginalHook(DreadFangs);
                         }
 
                         if (lastComboMove is HuntersSting or SwiftskinsSting)
                         {
-                            if (HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.HindstungVenom))
+                            if ((HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.HindstungVenom)) && LevelChecked(FlanksbaneFang))
                             {
                                 if (trueNorthReady && !OnTargetsRear() && HasEffect(Buffs.HindstungVenom))
                                     return All.TrueNorth;
 
-                                else if (trueNorthReady && !OnTargetsFlank() && HasEffect(Buffs.FlankstungVenom))
+                                if (trueNorthReady && !OnTargetsFlank() && HasEffect(Buffs.FlankstungVenom))
                                     return All.TrueNorth;
 
                                 return OriginalHook(SteelFangs);
                             }
 
-                            if (HasEffect(Buffs.FlanksbaneVenom) || HasEffect(Buffs.HindsbaneVenom))
+                            if ((HasEffect(Buffs.FlanksbaneVenom) || HasEffect(Buffs.HindsbaneVenom)) && LevelChecked(HindstingStrike))
                             {
                                 if (trueNorthReady && !OnTargetsRear() && HasEffect(Buffs.HindsbaneVenom))
                                     return All.TrueNorth;
 
-                                else if (trueNorthReady && !OnTargetsFlank() && HasEffect(Buffs.FlanksbaneVenom))
+                                if (trueNorthReady && !OnTargetsFlank() && HasEffect(Buffs.FlanksbaneVenom))
                                     return All.TrueNorth;
 
                                 return OriginalHook(DreadFangs);
@@ -250,21 +273,26 @@ namespace XIVSlothCombo.Combos.PvE
                                 WasLastAction(FlankstingStrike) || WasLastAction(FlanksbaneFang)))
                                 return OriginalHook(SerpentsTail);
 
-                            //Reawakend usage
-                            if (HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentsOfferings >= 50)
+                            //Reawakend Usage
+                            if ((HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentOffering >= 50) &&
+                                HasEffect(Buffs.Swiftscaled) &&
+                                HasEffect(Buffs.HuntersInstinct) &&
+                                TargetHasEffect(Debuffs.NoxiousGnash) &&
+                                !HasEffect(Buffs.HuntersVenom) && !HasEffect(Buffs.SwiftskinsVenom) &&
+                                !HasEffect(Buffs.PoisedForTwinblood) && !HasEffect(Buffs.PoisedForTwinfang) &&
+                                !WasLastAction(SerpentsIre))
                                 return Reawaken;
 
-                            if (ActionReady(Dreadwinder))
+                            //Dreadwinder Usage
+                            if ((LevelChecked(Dreadwinder) && GetCooldownRemainingTime(Dreadwinder) <= GetCooldownRemainingTime(OriginalHook(DreadFangs)) + 0.25) || ActionReady(Dreadwinder))
                                 return Dreadwinder;
-
-                            if (GetBuffRemainingTime(Buffs.Swiftscaled) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) <= NoxiousRefreshRange))
-                                return OriginalHook(DreadFangs);
-
-                            if (GetBuffRemainingTime(Buffs.HuntersInstinct) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) > NoxiousRefreshRange))
-                                return OriginalHook(SteelFangs);
                         }
+
+                        return (GetDebuffRemainingTime(Debuffs.NoxiousGnash) < 20 &&
+                            (!ActionReady(Dreadwinder) || combatDuration.Seconds < 5))
+                            ? OriginalHook(DreadFangs)
+                            : OriginalHook(SteelFangs);
+
                     }
                     return OriginalHook(DreadFangs);
                 }
@@ -279,9 +307,13 @@ namespace XIVSlothCombo.Combos.PvE
 
             protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
             {
-                var gauge = new TmpVPRGauge();
-                bool trueNorthReady = TargetNeedsPositionals() && ActionReady(All.TrueNorth) && !HasEffect(All.Buffs.TrueNorth) && !IsMoving && CanWeave(actionID);
-                int NoxiousRefreshRange = Config.VPR_NoxiousRefreshRange;
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+                bool trueNorthReady = TargetNeedsPositionals() && ActionReady(All.TrueNorth) && !HasEffect(All.Buffs.TrueNorth) && CanWeave(actionID);
+                float ST_NoxiousDebuffRefresh = Config.VPR_ST_NoxiousDebuffRefresh;
+                int positionalChoice = Config.VPR_Positional;
+                bool DreadwinderReady = gauge.DreadCombo == DreadCombo.Dreadwinder;
+                bool HuntersCoilReady = gauge.DreadCombo == DreadCombo.HuntersCoil;
+                bool SwiftskinsCoilReady = gauge.DreadCombo == DreadCombo.SwiftskinsCoil;
 
                 if (actionID is SteelFangs)
                 {
@@ -292,108 +324,146 @@ namespace XIVSlothCombo.Combos.PvE
                             return actionID;
                     }
 
+                    // Uncoiled combo
+                    if (IsEnabled(CustomComboPreset.VPR_ST_UncoiledFury) &&
+                        IsEnabled(CustomComboPreset.VPR_ST_UncoiledFuryCombo))
+                    {
+                        if (HasEffect(Buffs.PoisedForTwinfang))
+                            return OriginalHook(Twinfang);
+
+                        if (HasEffect(Buffs.PoisedForTwinblood))
+                            return OriginalHook(Twinblood);
+                    }
+
                     if (IsEnabled(CustomComboPreset.VPR_ST_RangedUptime) &&
                         LevelChecked(WrithingSnap) && !InMeleeRange() && HasBattleTarget())
-                        return WrithingSnap;
+                        return (IsEnabled(CustomComboPreset.VPR_ST_RangedUptimeUncoiledFury) && gauge.HasRattlingCoilStack())
+                            ? UncoiledFury
+                            : WrithingSnap;
 
+                    //Overcap protection
+                    if (IsEnabled(CustomComboPreset.VPR_ST_UncoiledFury) &&
+                        (HasCharges(Dreadwinder) || ActionReady(SerpentsIre)) &&
+                        ((gauge.RattlingCoilStacks is 3 && TraitLevelChecked(Traits.EnhancedVipersRattle)) ||
+                        (gauge.RattlingCoilStacks is 2 && !TraitLevelChecked(Traits.EnhancedVipersRattle))))
+                        return UncoiledFury;
 
-                    if (IsEnabled(CustomComboPreset.VPR_ST_CDs))
+                    //Serpents Ire usage
+                    if (IsEnabled(CustomComboPreset.VPR_ST_CDs) &&
+                        IsEnabled(CustomComboPreset.VPR_ST_SerpentsIre) &&
+                        CanWeave(actionID) && gauge.RattlingCoilStacks <= 2 && !HasEffect(Buffs.Reawakened) &&
+                        ((LevelChecked(SerpentsIre) && GetCooldownRemainingTime(SerpentsIre) <= GetCooldownRemainingTime(OriginalHook(DreadFangs)) + 0.25) || ActionReady(SerpentsIre)))
+                        return SerpentsIre;
+
+                    //Reawaken combo
+                    if (IsEnabled(CustomComboPreset.VPR_ST_ReawakenCombo) &&
+                        HasEffect(Buffs.Reawakened))
                     {
-                        //Overcap protection
-                        if (IsEnabled(CustomComboPreset.VPR_ST_UncoiledFury) &&
-                            HasCharges(Dreadwinder) &&
-                            ((gauge.RattlingCoilStacks is 3 && TraitLevelChecked(Traits.EnhancedVipersRattle)) ||
-                            (gauge.RattlingCoilStacks is 2 && !TraitLevelChecked(Traits.EnhancedVipersRattle))))
-                            return UncoiledFury;
-
-                        //Serpents Ire usage
-                        if (IsEnabled(CustomComboPreset.VPR_ST_SerpentsIre) &&
-                            ActionReady(SerpentsIre) && CanWeave(actionID))
-                            return SerpentsIre;
-
-                        //Reawaken combo
-                        if (IsEnabled(CustomComboPreset.VPR_ST_ReawakenCombo) &&
-                            HasEffect(Buffs.Reawakened))
+                        //Pre Ouroboros
+                        if (!TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                         {
-                            if (!TraitLevelChecked(Traits.EnhancedSerpentsLineage))
-                            {
-                                if (gauge.AnguineTribute is 4)
-                                    return OriginalHook(SteelFangs);
+                            if (gauge.AnguineTribute is 4)
+                                return OriginalHook(SteelFangs);
 
-                                if (gauge.AnguineTribute is 3)
-                                    return OriginalHook(DreadFangs);
+                            if (gauge.AnguineTribute is 3)
+                                return OriginalHook(DreadFangs);
 
-                                if (gauge.AnguineTribute is 2)
-                                    return OriginalHook(HuntersCoil);
+                            if (gauge.AnguineTribute is 2)
+                                return OriginalHook(HuntersCoil);
 
-                                if (gauge.AnguineTribute is 1)
-                                    return OriginalHook(SwiftskinsCoil);
-                            }
-
-                            if (TraitLevelChecked(Traits.EnhancedSerpentsLineage))
-                            {
-                                //Legacy weaves
-                                if (TraitLevelChecked(Traits.EnhancedSerpentsLineage) && CanWeave(actionID) &&
-                                    (WasLastAction(OriginalHook(SteelFangs)) || WasLastAction(OriginalHook(DreadFangs)) ||
-                                    WasLastAction(OriginalHook(HuntersCoil)) || WasLastAction(OriginalHook(SwiftskinsCoil))))
-                                    return OriginalHook(SerpentsTail);
-
-                                if (gauge.AnguineTribute is 5)
-                                    return OriginalHook(SteelFangs);
-
-                                if (gauge.AnguineTribute is 4)
-                                    return OriginalHook(DreadFangs);
-
-                                if (gauge.AnguineTribute is 3)
-                                    return OriginalHook(HuntersCoil);
-
-                                if (gauge.AnguineTribute is 2)
-                                    return OriginalHook(SwiftskinsCoil);
-
-                                if (gauge.AnguineTribute is 1)
-                                    return OriginalHook(Reawaken);
-                            }
+                            if (gauge.AnguineTribute is 1)
+                                return OriginalHook(SwiftskinsCoil);
                         }
 
-                        // Uncoiled Fury usage
-                        if (IsEnabled(CustomComboPreset.VPR_ST_UncoiledFury))
+                        //With Ouroboros
+                        if (TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                         {
-                            if (LevelChecked(UncoiledFury) && gauge.HasRattlingCoilStack())
-                                return UncoiledFury;
+                            //Legacy weaves
+                            if (TraitLevelChecked(Traits.SerpentsLegacy) && CanWeave(actionID) &&
+                                (WasLastAction(OriginalHook(SteelFangs)) || WasLastAction(OriginalHook(DreadFangs)) ||
+                                WasLastAction(OriginalHook(HuntersCoil)) || WasLastAction(OriginalHook(SwiftskinsCoil))))
+                                return OriginalHook(SerpentsTail);
 
-                            // Uncoiled follow-ups
-                            if (IsEnabled(CustomComboPreset.VPR_ST_UncoiledFuryCombo))
-                            {
-                                if (WasLastWeaponskill(UncoiledFury))
-                                {
-                                    if (HasEffect(Buffs.PoisedForTwinfang))
-                                        return OriginalHook(Twinfang);
+                            if (gauge.AnguineTribute is 5)
+                                return OriginalHook(SteelFangs);
 
-                                    if (HasEffect(Buffs.PoisedForTwinblood))
-                                        return OriginalHook(Twinblood);
-                                }
-                            }
+                            if (gauge.AnguineTribute is 4)
+                                return OriginalHook(DreadFangs);
+
+                            if (gauge.AnguineTribute is 3)
+                                return OriginalHook(HuntersCoil);
+
+                            if (gauge.AnguineTribute is 2)
+                                return OriginalHook(SwiftskinsCoil);
+
+                            if (gauge.AnguineTribute is 1)
+                                return OriginalHook(Reawaken);
                         }
+                    }
 
-                        // Dreadwinder usage
-                        if (IsEnabled(CustomComboPreset.VPR_ST_DreadwinderCombo))
+                    // Dreadwinder combo
+                    if (IsEnabled(CustomComboPreset.VPR_ST_CDs) &&
+                        IsEnabled(CustomComboPreset.VPR_ST_Dreadwinder) &&
+                        IsEnabled(CustomComboPreset.VPR_ST_DreadwinderCombo))
+                    {
+                        if (HasEffect(Buffs.HuntersVenom))
+                            return OriginalHook(Twinfang);
+
+                        if (HasEffect(Buffs.SwiftskinsVenom))
+                            return OriginalHook(Twinblood);
+
+                        if (positionalChoice is 0)
                         {
-                            // Dreadwinder combo
-                            if (WasLastWeaponskill(HuntersCoil) || WasLastWeaponskill(SwiftskinsCoil))
+
+                            if (SwiftskinsCoilReady)
                             {
-                                if (HasEffect(Buffs.HuntersVenom))
-                                    return OriginalHook(Twinfang);
+                                if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
+                                   trueNorthReady && !OnTargetsFlank())
+                                    return All.TrueNorth;
 
-                                if (HasEffect(Buffs.SwiftskinsVenom))
-                                    return OriginalHook(Twinblood);
-                            }
-
-                            if (WasLastWeaponskill(SwiftskinsCoil))
                                 return HuntersCoil;
+                            }
 
-                            if (gauge.DreadwinderReady && !WasLastWeaponskill(SwiftskinsCoil))
+                            if (DreadwinderReady)
+                            {
+                                if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
+                                    trueNorthReady && !OnTargetsRear())
+                                    return All.TrueNorth;
+
                                 return SwiftskinsCoil;
+                            }
                         }
+
+                        if (positionalChoice is 1)
+                        {
+                            if (HuntersCoilReady)
+                            {
+                                if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
+                                   trueNorthReady && !OnTargetsRear())
+                                    return All.TrueNorth;
+
+                                return SwiftskinsCoil;
+                            }
+
+                            if (DreadwinderReady)
+                            {
+                                if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
+                                   trueNorthReady && !OnTargetsFlank())
+                                    return All.TrueNorth;
+
+                                return HuntersCoil;
+                            }
+                        }
+                    }
+
+                    // Uncoiled Fury usage
+                    if (IsEnabled(CustomComboPreset.VPR_ST_UncoiledFury))
+                    {
+                        if (LevelChecked(UncoiledFury) && gauge.RattlingCoilStacks > Config.VPR_ST_UncoiledFury_HoldCharges &&
+                            !DreadwinderReady && !HuntersCoilReady && !SwiftskinsCoilReady &&
+                            !HasEffect(Buffs.SwiftskinsVenom) && !HasEffect(Buffs.HuntersVenom) &&
+                            HasEffect(Buffs.Swiftscaled) && HasEffect(Buffs.HuntersInstinct))
+                            return UncoiledFury;
                     }
 
                     // healing
@@ -411,35 +481,35 @@ namespace XIVSlothCombo.Combos.PvE
                     {
                         if (lastComboMove is DreadFangs or SteelFangs)
                         {
-                            if (HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.FlanksbaneVenom))
+                            if ((HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.FlanksbaneVenom)) && LevelChecked(FlankstingStrike))
                                 return OriginalHook(SteelFangs);
 
-                            if (HasEffect(Buffs.HindstungVenom) || HasEffect(Buffs.HindsbaneVenom))
+                            if ((HasEffect(Buffs.HindstungVenom) || HasEffect(Buffs.HindsbaneVenom)) && LevelChecked(HindstingStrike))
                                 return OriginalHook(DreadFangs);
                         }
 
                         if (lastComboMove is HuntersSting or SwiftskinsSting)
                         {
-                            if (HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.HindstungVenom))
+                            if ((HasEffect(Buffs.FlankstungVenom) || HasEffect(Buffs.HindstungVenom)) && LevelChecked(FlanksbaneFang))
                             {
                                 if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
                                     trueNorthReady && !OnTargetsRear() && HasEffect(Buffs.HindstungVenom))
                                     return All.TrueNorth;
 
-                                else if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
+                                if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
                                     trueNorthReady && !OnTargetsFlank() && HasEffect(Buffs.FlankstungVenom))
                                     return All.TrueNorth;
 
                                 return OriginalHook(SteelFangs);
                             }
 
-                            if (HasEffect(Buffs.FlanksbaneVenom) || HasEffect(Buffs.HindsbaneVenom))
+                            if ((HasEffect(Buffs.FlanksbaneVenom) || HasEffect(Buffs.HindsbaneVenom)) && LevelChecked(HindstingStrike))
                             {
                                 if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
                                     trueNorthReady && !OnTargetsRear() && HasEffect(Buffs.HindsbaneVenom))
                                     return All.TrueNorth;
 
-                                else if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
+                                if (IsEnabled(CustomComboPreset.VPR_TrueNorthDynamic) &&
                                     trueNorthReady && !OnTargetsFlank() && HasEffect(Buffs.FlanksbaneVenom))
                                     return All.TrueNorth;
 
@@ -455,25 +525,35 @@ namespace XIVSlothCombo.Combos.PvE
                                 WasLastAction(FlankstingStrike) || WasLastAction(FlanksbaneFang)))
                                 return OriginalHook(SerpentsTail);
 
-                            //Reawakend usage
+                            //Reawakend Usage
                             if (IsEnabled(CustomComboPreset.VPR_ST_Reawaken) &&
-                                (HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentsOfferings >= 50))
+                                (HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentOffering >= 50) &&
+                                HasEffect(Buffs.Swiftscaled) &&
+                                HasEffect(Buffs.HuntersInstinct) &&
+                                TargetHasEffect(Debuffs.NoxiousGnash) &&
+                                !HasEffect(Buffs.HuntersVenom) && !HasEffect(Buffs.SwiftskinsVenom) &&
+                                !HasEffect(Buffs.PoisedForTwinblood) && !HasEffect(Buffs.PoisedForTwinfang) &&
+                                !WasLastAction(SerpentsIre) && GetTargetHPPercent() >= Config.VPR_ST_Reawaken_Usage)
                                 return Reawaken;
 
-                            if (IsEnabled(CustomComboPreset.VPR_ST_Dreadwinder) &&
-                                ActionReady(Dreadwinder))
+                            //Dreadwinder Usage
+                            if (IsEnabled(CustomComboPreset.VPR_ST_CDs) &&
+                                IsEnabled(CustomComboPreset.VPR_ST_Dreadwinder) &&
+                                ((LevelChecked(Dreadwinder) && GetCooldownRemainingTime(Dreadwinder) <= GetCooldownRemainingTime(OriginalHook(DreadFangs)) + 0.25) || ActionReady(Dreadwinder)))
                                 return Dreadwinder;
-
-                            if (GetBuffRemainingTime(Buffs.Swiftscaled) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) <= NoxiousRefreshRange))
-                                return OriginalHook(DreadFangs);
-
-                            if (GetBuffRemainingTime(Buffs.HuntersInstinct) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) > NoxiousRefreshRange))
-                                return OriginalHook(SteelFangs);
                         }
+
+                        return (IsEnabled(CustomComboPreset.VPR_ST_NoxiousGnash) &&
+                            GetDebuffRemainingTime(Debuffs.NoxiousGnash) < ST_NoxiousDebuffRefresh &&
+                            ((IsEnabled(CustomComboPreset.VPR_ST_Dreadwinder) && !ActionReady(Dreadwinder)) ||
+                            !IsEnabled(CustomComboPreset.VPR_ST_Dreadwinder)))
+                            ? OriginalHook(DreadFangs)
+                            : OriginalHook(SteelFangs);
+
                     }
-                    return OriginalHook(DreadFangs);
+                    return IsEnabled(CustomComboPreset.VPR_ST_NoxiousGnash)
+                            ? OriginalHook(DreadFangs)
+                            : OriginalHook(SteelFangs);
                 }
                 return actionID;
             }
@@ -485,23 +565,37 @@ namespace XIVSlothCombo.Combos.PvE
 
             protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
             {
-                var gauge = new TmpVPRGauge();
-                int NoxiousRefreshRange = Config.VPR_NoxiousRefreshRange;
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+                float AoE_NoxiousDebuffRefresh = Config.VPR_AoE_NoxiousDebuffRefresh;
+                bool PitOfDreadReady = gauge.DreadCombo == DreadCombo.PitOfDread;
+                bool SwiftskinsDenReady = gauge.DreadCombo == DreadCombo.SwiftskinsDen;
+                bool HuntersDenReady = gauge.DreadCombo == DreadCombo.HuntersDen;
 
                 if (actionID is SteelMaw)
                 {
+                    // Uncoiled combo
+
+                    if (HasEffect(Buffs.PoisedForTwinfang))
+                        return OriginalHook(Twinfang);
+
+                    if (HasEffect(Buffs.PoisedForTwinblood))
+                        return OriginalHook(Twinblood);
+
                     //Overcap protection
-                    if (HasCharges(Dreadwinder) &&
+                    if ((HasCharges(PitofDread) || ActionReady(SerpentsIre)) &&
                         ((gauge.RattlingCoilStacks is 3 && TraitLevelChecked(Traits.EnhancedVipersRattle)) ||
                         (gauge.RattlingCoilStacks is 2 && !TraitLevelChecked(Traits.EnhancedVipersRattle))))
                         return UncoiledFury;
 
                     //Serpents Ire usage
-                    if (ActionReady(SerpentsIre) && CanWeave(actionID))
+                    if (CanWeave(actionID) && gauge.RattlingCoilStacks <= 2 && !HasEffect(Buffs.Reawakened) &&
+                        ((LevelChecked(SerpentsIre) && GetCooldownRemainingTime(SerpentsIre) <= GetCooldownRemainingTime(OriginalHook(DreadFangs)) + 0.25) || ActionReady(SerpentsIre)))
                         return SerpentsIre;
 
+                    //Reawaken combo
                     if (HasEffect(Buffs.Reawakened))
                     {
+                        //Pre Ouroboros
                         if (!TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                         {
                             if (gauge.AnguineTribute is 4)
@@ -517,10 +611,11 @@ namespace XIVSlothCombo.Combos.PvE
                                 return OriginalHook(SwiftskinsDen);
                         }
 
+                        //With Ouroboros
                         if (TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                         {
                             //Legacy weaves
-                            if (TraitLevelChecked(Traits.EnhancedSerpentsLineage) && CanWeave(actionID) &&
+                            if (TraitLevelChecked(Traits.SerpentsLegacy) && CanWeave(actionID) &&
                                 (WasLastAction(OriginalHook(SteelMaw)) || WasLastAction(OriginalHook(DreadMaw)) ||
                                 WasLastAction(OriginalHook(HuntersDen)) || WasLastAction(OriginalHook(SwiftskinsDen))))
                                 return OriginalHook(SerpentsTail);
@@ -542,37 +637,26 @@ namespace XIVSlothCombo.Combos.PvE
                         }
                     }
 
-                    // Uncoiled Fury usage
+                    // Pit of Dread combo
 
-                    if (LevelChecked(UncoiledFury) && gauge.HasRattlingCoilStack())
-                        return UncoiledFury;
+                    if (HasEffect(Buffs.FellhuntersVenom))
+                        return OriginalHook(Twinfang);
 
-                    // Uncoiled follow-ups
+                    if (HasEffect(Buffs.FellskinsVenom))
+                        return OriginalHook(Twinblood);
 
-                    if (WasLastWeaponskill(UncoiledFury))
-                    {
-                        if (HasEffect(Buffs.PoisedForTwinfang))
-                            return OriginalHook(Twinfang);
-
-                        if (HasEffect(Buffs.PoisedForTwinblood))
-                            return OriginalHook(Twinblood);
-                    }
-
-                    // Dreadwinder usage
-                    // Dreadwinder combo
-                    if (WasLastWeaponskill(HuntersDen) || WasLastWeaponskill(SwiftskinsDen))
-                    {
-                        if (HasEffect(Buffs.FellhuntersVenom))
-                            return OriginalHook(Twinfang);
-
-                        if (HasEffect(Buffs.FellskinsVenom))
-                            return OriginalHook(Twinblood);
-                    }
-                    if (WasLastWeaponskill(SwiftskinsDen))
+                    if (SwiftskinsDenReady)
                         return HuntersDen;
 
-                    if (gauge.PitOfDreadReady && !WasLastWeaponskill(SwiftskinsDen))
+                    if (PitOfDreadReady)
                         return SwiftskinsDen;
+
+                    // Uncoiled Fury usage
+                    if (LevelChecked(UncoiledFury) && gauge.RattlingCoilStacks > Config.VPR_AoE_UncoiledFury_HoldCharges &&
+                        !PitOfDreadReady && !HuntersDenReady && !SwiftskinsDenReady &&
+                        !HasEffect(Buffs.FellskinsVenom) && !HasEffect(Buffs.FellhuntersVenom) &&
+                        HasEffect(Buffs.Swiftscaled) && HasEffect(Buffs.HuntersInstinct))
+                        return UncoiledFury;
 
                     //1-2-3 (4-5-6) Combo
                     if (comboTime > 0 && !HasEffect(Buffs.Reawakened))
@@ -595,27 +679,30 @@ namespace XIVSlothCombo.Combos.PvE
                                 return OriginalHook(DreadMaw);
                         }
 
-                        if (lastComboMove is JaggedMaw or BloodiedMaw)
+                        if (lastComboMove is BloodiedMaw or JaggedMaw)
                         {
-                            if (CanWeave(actionID) && ActionReady(SerpentsTail) &&
-                               (WasLastAction(JaggedMaw) || WasLastAction(BloodiedMaw)))
+                            if (CanWeave(actionID) && LevelChecked(SerpentsTail) &&
+                                (WasLastAction(BloodiedMaw) || WasLastAction(JaggedMaw)))
                                 return OriginalHook(SerpentsTail);
 
-                            //Reawakend usage
-                            if (HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentsOfferings >= 50)
+                            //Reawakend Usage
+                            if ((HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentOffering >= 50) &&
+                                HasEffect(Buffs.Swiftscaled) &&
+                                HasEffect(Buffs.HuntersInstinct) &&
+                                TargetHasEffect(Debuffs.NoxiousGnash) &&
+                                !HasEffect(Buffs.FellhuntersVenom) && !HasEffect(Buffs.FellskinsVenom) &&
+                                !HasEffect(Buffs.PoisedForTwinblood) && !HasEffect(Buffs.PoisedForTwinfang) &&
+                                !WasLastAction(SerpentsIre) && GetTargetHPPercent() >= Config.VPR_AoE_Reawaken_Usage)
                                 return Reawaken;
 
-                            if (ActionReady(PitofDread))
+                            //Pit of Dread Usage
+                            if ((LevelChecked(PitofDread) && GetCooldownRemainingTime(PitofDread) <= GetCooldownRemainingTime(OriginalHook(DreadMaw)) + 0.25) || ActionReady(PitofDread))
                                 return PitofDread;
-
-                            if (GetBuffRemainingTime(Buffs.Swiftscaled) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) <= NoxiousRefreshRange))
-                                return OriginalHook(DreadMaw);
-
-                            if (GetBuffRemainingTime(Buffs.HuntersInstinct) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) > NoxiousRefreshRange))
-                                return OriginalHook(SteelMaw);
                         }
+
+                        return (GetDebuffRemainingTime(Debuffs.NoxiousGnash) < AoE_NoxiousDebuffRefresh && !ActionReady(PitofDread))
+                             ? OriginalHook(DreadMaw)
+                             : OriginalHook(SteelMaw);
                     }
                     return OriginalHook(DreadMaw);
                 }
@@ -629,107 +716,111 @@ namespace XIVSlothCombo.Combos.PvE
 
             protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
             {
-                var gauge = new TmpVPRGauge();
-                int NoxiousRefreshRange = Config.VPR_NoxiousRefreshRange;
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+                float AoE_NoxiousDebuffRefresh = Config.VPR_AoE_NoxiousDebuffRefresh;
+                bool PitOfDreadReady = gauge.DreadCombo == DreadCombo.PitOfDread;
+                bool SwiftskinsDenReady = gauge.DreadCombo == DreadCombo.SwiftskinsDen;
+                bool HuntersDenReady = gauge.DreadCombo == DreadCombo.HuntersDen;
 
                 if (actionID is SteelMaw)
                 {
-
-                    if (IsEnabled(CustomComboPreset.VPR_AoE_CDs))
+                    // Uncoiled combo
+                    if (IsEnabled(CustomComboPreset.VPR_AoE_UncoiledFury) &&
+                        IsEnabled(CustomComboPreset.VPR_AoE_UncoiledFuryCombo))
                     {
-                        //Overcap protection
-                        if (IsEnabled(CustomComboPreset.VPR_AoE_UncoiledFury) &&
-                            HasCharges(Dreadwinder) &&
-                            ((gauge.RattlingCoilStacks is 3 && TraitLevelChecked(Traits.EnhancedVipersRattle)) ||
-                            (gauge.RattlingCoilStacks is 2 && !TraitLevelChecked(Traits.EnhancedVipersRattle))))
+                        if (HasEffect(Buffs.PoisedForTwinfang))
+                            return OriginalHook(Twinfang);
+
+                        if (HasEffect(Buffs.PoisedForTwinblood))
+                            return OriginalHook(Twinblood);
+                    }
+
+                    //Overcap protection
+                    if (IsEnabled(CustomComboPreset.VPR_AoE_UncoiledFury) &&
+                        (HasCharges(PitofDread) || ActionReady(SerpentsIre)) &&
+                        ((gauge.RattlingCoilStacks is 3 && TraitLevelChecked(Traits.EnhancedVipersRattle)) ||
+                        (gauge.RattlingCoilStacks is 2 && !TraitLevelChecked(Traits.EnhancedVipersRattle))))
+                        return UncoiledFury;
+
+                    //Serpents Ire usage
+                    if (IsEnabled(CustomComboPreset.VPR_AoE_CDs) &&
+                        IsEnabled(CustomComboPreset.VPR_AoE_SerpentsIre) &&
+                        CanWeave(actionID) && gauge.RattlingCoilStacks <= 2 && !HasEffect(Buffs.Reawakened) &&
+                        ((LevelChecked(SerpentsIre) && GetCooldownRemainingTime(SerpentsIre) <= GetCooldownRemainingTime(OriginalHook(DreadFangs)) + 0.25) || ActionReady(SerpentsIre)))
+                        return SerpentsIre;
+
+                    //Reawaken combo
+                    if (IsEnabled(CustomComboPreset.VPR_AoE_ReawakenCombo) &&
+                        HasEffect(Buffs.Reawakened))
+                    {
+                        //Pre Ouroboros
+                        if (!TraitLevelChecked(Traits.EnhancedSerpentsLineage))
+                        {
+                            if (gauge.AnguineTribute is 4)
+                                return OriginalHook(SteelMaw);
+
+                            if (gauge.AnguineTribute is 3)
+                                return OriginalHook(DreadMaw);
+
+                            if (gauge.AnguineTribute is 2)
+                                return OriginalHook(HuntersDen);
+
+                            if (gauge.AnguineTribute is 1)
+                                return OriginalHook(SwiftskinsDen);
+                        }
+
+                        //With Ouroboros
+                        if (TraitLevelChecked(Traits.EnhancedSerpentsLineage))
+                        {
+                            //Legacy weaves
+                            if (TraitLevelChecked(Traits.SerpentsLegacy) && CanWeave(actionID) &&
+                                (WasLastAction(OriginalHook(SteelMaw)) || WasLastAction(OriginalHook(DreadMaw)) ||
+                                WasLastAction(OriginalHook(HuntersDen)) || WasLastAction(OriginalHook(SwiftskinsDen))))
+                                return OriginalHook(SerpentsTail);
+
+                            if (gauge.AnguineTribute is 5)
+                                return OriginalHook(SteelMaw);
+
+                            if (gauge.AnguineTribute is 4)
+                                return OriginalHook(DreadMaw);
+
+                            if (gauge.AnguineTribute is 3)
+                                return OriginalHook(HuntersDen);
+
+                            if (gauge.AnguineTribute is 2)
+                                return OriginalHook(SwiftskinsDen);
+
+                            if (gauge.AnguineTribute is 1)
+                                return OriginalHook(Reawaken);
+                        }
+                    }
+
+                    // Pit of Dread combo
+                    if (IsEnabled(CustomComboPreset.VPR_AoE_CDs) &&
+                        IsEnabled(CustomComboPreset.VPR_AoE_PitOfDread) &&
+                        IsEnabled(CustomComboPreset.VPR_AoE_PitOfDreadCombo))
+                    {
+                        if (HasEffect(Buffs.FellhuntersVenom))
+                            return OriginalHook(Twinfang);
+
+                        if (HasEffect(Buffs.FellskinsVenom))
+                            return OriginalHook(Twinblood);
+
+                        if (SwiftskinsDenReady)
+                            return HuntersDen;
+
+                        if (PitOfDreadReady)
+                            return SwiftskinsDen;
+                    }
+
+                    // Uncoiled Fury usage
+                    if (IsEnabled(CustomComboPreset.VPR_AoE_UncoiledFury))
+                    {
+                        if (LevelChecked(UncoiledFury) && gauge.RattlingCoilStacks > Config.VPR_AoE_UncoiledFury_HoldCharges &&
+                            !PitOfDreadReady && !HuntersDenReady && !SwiftskinsDenReady &&
+                            !HasEffect(Buffs.FellskinsVenom) && !HasEffect(Buffs.FellhuntersVenom) &&
+                            HasEffect(Buffs.Swiftscaled) && HasEffect(Buffs.HuntersInstinct))
                             return UncoiledFury;
-
-                        //Serpents Ire usage
-                        if (IsEnabled(CustomComboPreset.VPR_AoE_SerpentsIre) &&
-                            ActionReady(SerpentsIre) && CanWeave(actionID))
-                            return SerpentsIre;
-
-                        if (IsEnabled(CustomComboPreset.VPR_AoE_ReawakenCombo) &&
-                                 HasEffect(Buffs.Reawakened))
-                        {
-                            if (!TraitLevelChecked(Traits.EnhancedSerpentsLineage))
-                            {
-                                if (gauge.AnguineTribute is 4)
-                                    return OriginalHook(SteelMaw);
-
-                                if (gauge.AnguineTribute is 3)
-                                    return OriginalHook(DreadMaw);
-
-                                if (gauge.AnguineTribute is 2)
-                                    return OriginalHook(HuntersDen);
-
-                                if (gauge.AnguineTribute is 1)
-                                    return OriginalHook(SwiftskinsDen);
-                            }
-
-                            if (TraitLevelChecked(Traits.EnhancedSerpentsLineage))
-                            {
-                                //Legacy weaves
-                                if (TraitLevelChecked(Traits.EnhancedSerpentsLineage) && CanWeave(actionID) &&
-                                    (WasLastAction(OriginalHook(SteelMaw)) || WasLastAction(OriginalHook(DreadMaw)) ||
-                                    WasLastAction(OriginalHook(HuntersDen)) || WasLastAction(OriginalHook(SwiftskinsDen))))
-                                    return OriginalHook(SerpentsTail);
-
-                                if (gauge.AnguineTribute is 5)
-                                    return OriginalHook(SteelMaw);
-
-                                if (gauge.AnguineTribute is 4)
-                                    return OriginalHook(DreadMaw);
-
-                                if (gauge.AnguineTribute is 3)
-                                    return OriginalHook(HuntersDen);
-
-                                if (gauge.AnguineTribute is 2)
-                                    return OriginalHook(SwiftskinsDen);
-
-                                if (gauge.AnguineTribute is 1)
-                                    return OriginalHook(Reawaken);
-                            }
-                        }
-
-                        // Uncoiled Fury usage
-                        if (IsEnabled(CustomComboPreset.VPR_AoE_UncoiledFury))
-                        {
-                            if (LevelChecked(UncoiledFury) && gauge.HasRattlingCoilStack())
-                                return UncoiledFury;
-
-                            // Uncoiled follow-ups
-                            if (IsEnabled(CustomComboPreset.VPR_AoE_UncoiledFuryCombo))
-                            {
-                                if (WasLastWeaponskill(UncoiledFury))
-                                {
-                                    if (HasEffect(Buffs.PoisedForTwinfang))
-                                        return OriginalHook(Twinfang);
-
-                                    if (HasEffect(Buffs.PoisedForTwinblood))
-                                        return OriginalHook(Twinblood);
-                                }
-                            }
-                        }
-
-                        // Dreadwinder usage
-                        if (IsEnabled(CustomComboPreset.VPR_AoE_PitOfDreadCombo))
-                        {
-                            // Dreadwinder combo
-                            if (WasLastWeaponskill(HuntersDen) || WasLastWeaponskill(SwiftskinsDen))
-                            {
-                                if (HasEffect(Buffs.FellhuntersVenom))
-                                    return OriginalHook(Twinfang);
-
-                                if (HasEffect(Buffs.FellskinsVenom))
-                                    return OriginalHook(Twinblood);
-                            }
-                            if (WasLastWeaponskill(SwiftskinsDen))
-                                return HuntersDen;
-
-                            if (gauge.PitOfDreadReady && !WasLastWeaponskill(SwiftskinsDen))
-                                return SwiftskinsDen;
-                        }
                     }
 
                     // healing
@@ -763,32 +854,42 @@ namespace XIVSlothCombo.Combos.PvE
                                 return OriginalHook(DreadMaw);
                         }
 
-                        if (lastComboMove is JaggedMaw or BloodiedMaw)
+                        if (lastComboMove is BloodiedMaw or JaggedMaw)
                         {
                             if (IsEnabled(CustomComboPreset.VPR_AoE_SerpentsTail) &&
-                               CanWeave(actionID) && ActionReady(SerpentsTail) &&
-                               (WasLastAction(JaggedMaw) || WasLastAction(BloodiedMaw)))
+                                CanWeave(actionID) && LevelChecked(SerpentsTail) &&
+                                (WasLastAction(BloodiedMaw) || WasLastAction(JaggedMaw)))
                                 return OriginalHook(SerpentsTail);
 
-                            //Reawakend usage
-                            if (IsEnabled(CustomComboPreset.VPR_AoE_Reawaken) &&
-                                (HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentsOfferings >= 50))
+                            //Reawakend Usage
+                            if (IsEnabled(CustomComboPreset.VPR_ST_Reawaken) &&
+                                (HasEffect(Buffs.ReadyToReawaken) || gauge.SerpentOffering >= 50) &&
+                                HasEffect(Buffs.Swiftscaled) &&
+                                HasEffect(Buffs.HuntersInstinct) &&
+                                TargetHasEffect(Debuffs.NoxiousGnash) &&
+                                !HasEffect(Buffs.FellhuntersVenom) && !HasEffect(Buffs.FellskinsVenom) &&
+                                !HasEffect(Buffs.PoisedForTwinblood) && !HasEffect(Buffs.PoisedForTwinfang) &&
+                                !WasLastAction(SerpentsIre) && GetTargetHPPercent() >= Config.VPR_AoE_Reawaken_Usage)
                                 return Reawaken;
 
-                            if (IsEnabled(CustomComboPreset.VPR_AoE_PitOfDread) &&
-                                ActionReady(PitofDread))
+                            //Pit of Dread Usage
+                            if (IsEnabled(CustomComboPreset.VPR_AoE_CDs) &&
+                                 IsEnabled(CustomComboPreset.VPR_AoE_PitOfDread) &&
+                                 ((LevelChecked(PitofDread) && GetCooldownRemainingTime(PitofDread) <= GetCooldownRemainingTime(OriginalHook(DreadMaw)) + 0.25) || ActionReady(PitofDread)))
                                 return PitofDread;
-
-                            if (GetBuffRemainingTime(Buffs.Swiftscaled) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) <= NoxiousRefreshRange))
-                                return OriginalHook(DreadMaw);
-
-                            if (GetBuffRemainingTime(Buffs.HuntersInstinct) < 10 ||
-                                (GetDebuffRemainingTime(Debuffs.NoxiousGnash) > NoxiousRefreshRange))
-                                return OriginalHook(SteelMaw);
                         }
+
+                        return (IsEnabled(CustomComboPreset.VPR_AoE_NoxiousGnash) &&
+                             GetDebuffRemainingTime(Debuffs.NoxiousGnash) < AoE_NoxiousDebuffRefresh &&
+                             ((IsEnabled(CustomComboPreset.VPR_AoE_PitOfDread) && !ActionReady(PitofDread)) ||
+                             !IsEnabled(CustomComboPreset.VPR_AoE_PitOfDread)))
+                             ? OriginalHook(DreadMaw)
+                             : OriginalHook(SteelMaw);
+
                     }
-                    return OriginalHook(DreadMaw);
+                    return IsEnabled(CustomComboPreset.VPR_AoE_NoxiousGnash)
+                            ? OriginalHook(DreadMaw)
+                            : OriginalHook(SteelMaw);
                 }
                 return actionID;
             }
@@ -800,7 +901,11 @@ namespace XIVSlothCombo.Combos.PvE
 
             protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
             {
-                var gauge = new TmpVPRGauge();
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+                int positionalChoice = Config.VPR_Positional;
+                bool DreadwinderReady = gauge.DreadCombo == DreadCombo.Dreadwinder;
+                bool HuntersCoilReady = gauge.DreadCombo == DreadCombo.HuntersCoil;
+                bool SwiftskinsCoilReady = gauge.DreadCombo == DreadCombo.SwiftskinsCoil;
 
                 if (actionID is Dreadwinder)
                 {
@@ -813,11 +918,23 @@ namespace XIVSlothCombo.Combos.PvE
                             return OriginalHook(Twinblood);
                     }
 
-                    if (WasLastWeaponskill(SwiftskinsCoil))
-                        return HuntersCoil;
+                    if (positionalChoice is 0)
+                    {
+                        if (SwiftskinsCoilReady)
+                            return HuntersCoil;
 
-                    if (gauge.DreadwinderReady && !WasLastWeaponskill(SwiftskinsCoil))
-                        return SwiftskinsCoil;
+                        if (DreadwinderReady)
+                            return SwiftskinsCoil;
+                    }
+
+                    if (positionalChoice is 1)
+                    {
+                        if (HuntersCoilReady)
+                            return SwiftskinsCoil;
+
+                        if (DreadwinderReady)
+                            return HuntersCoil;
+                    }
                 }
                 return actionID;
             }
@@ -829,7 +946,10 @@ namespace XIVSlothCombo.Combos.PvE
 
             protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
             {
-                var gauge = new TmpVPRGauge();
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+                bool PitOfDreadReady = gauge.DreadCombo == DreadCombo.PitOfDread;
+                bool SwiftskinsDenReady = gauge.DreadCombo == DreadCombo.SwiftskinsDen;
+                bool HuntersDenReady = gauge.DreadCombo == DreadCombo.HuntersDen;
 
                 if (actionID is PitofDread)
                 {
@@ -841,10 +961,10 @@ namespace XIVSlothCombo.Combos.PvE
                         if (HasEffect(Buffs.FellskinsVenom))
                             return OriginalHook(Twinblood);
                     }
-                    if (WasLastWeaponskill(SwiftskinsDen))
+                    if (SwiftskinsDenReady)
                         return HuntersDen;
 
-                    if (gauge.PitOfDreadReady && !WasLastWeaponskill(SwiftskinsDen))
+                    if (PitOfDreadReady)
                         return SwiftskinsDen;
                 }
                 return actionID;
@@ -875,8 +995,11 @@ namespace XIVSlothCombo.Combos.PvE
 
             protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
             {
-                var gauge = new TmpVPRGauge();
-                if (actionID is Reawaken && HasEffect(Buffs.Reawakened))
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+                int buttonChoice = Config.VPR_ReawakenLegacyButton;
+
+                if ((buttonChoice is 0 && actionID is Reawaken && HasEffect(Buffs.Reawakened)) ||
+                    (buttonChoice is 1 && actionID is SteelFangs && HasEffect(Buffs.Reawakened)))
                 {
                     if (!TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                     {
@@ -896,10 +1019,13 @@ namespace XIVSlothCombo.Combos.PvE
                     if (TraitLevelChecked(Traits.EnhancedSerpentsLineage))
                     {
                         //Legacy weaves
-                        if (TraitLevelChecked(Traits.EnhancedSerpentsLineage) && CanWeave(actionID) &&
-                            (WasLastAction(OriginalHook(SteelFangs)) || WasLastAction(OriginalHook(DreadFangs)) ||
-                            WasLastAction(OriginalHook(HuntersCoil)) || WasLastAction(OriginalHook(SwiftskinsCoil))))
-                            return OriginalHook(SerpentsTail);
+                        if (IsEnabled(CustomComboPreset.VPR_ReawakenLegacyWeaves))
+                        {
+                            if (TraitLevelChecked(Traits.SerpentsLegacy) && CanWeave(actionID) &&
+                                (WasLastAction(OriginalHook(SteelFangs)) || WasLastAction(OriginalHook(DreadFangs)) ||
+                                WasLastAction(OriginalHook(HuntersCoil)) || WasLastAction(OriginalHook(SwiftskinsCoil))))
+                                return OriginalHook(SerpentsTail);
+                        }
 
                         if (gauge.AnguineTribute is 5)
                             return OriginalHook(SteelFangs);
@@ -916,6 +1042,43 @@ namespace XIVSlothCombo.Combos.PvE
                         if (gauge.AnguineTribute is 1)
                             return OriginalHook(Reawaken);
                     }
+                }
+                return actionID;
+            }
+        }
+
+        internal class VPR_TwinTails : CustomCombo
+        {
+            protected internal override CustomComboPreset Preset { get; } = CustomComboPreset.VPR_TwinTails;
+            protected override uint Invoke(uint actionID, uint lastComboMove, float comboTime, byte level)
+            {
+                VPRGauge? gauge = GetJobGauge<VPRGauge>();
+
+                if (actionID is SerpentsTail)
+                {
+                    if (TraitLevelChecked(Traits.SerpentsLegacy) && CanWeave(actionID) &&
+                        (WasLastAction(OriginalHook(SteelMaw)) || WasLastAction(OriginalHook(DreadMaw)) ||
+                        WasLastAction(OriginalHook(HuntersDen)) || WasLastAction(OriginalHook(SwiftskinsDen))))
+                        return OriginalHook(SerpentsTail);
+
+                    if (HasEffect(Buffs.PoisedForTwinfang))
+                        return OriginalHook(Twinfang);
+
+                    if (HasEffect(Buffs.PoisedForTwinblood))
+                        return OriginalHook(Twinblood);
+
+                    if (HasEffect(Buffs.HuntersVenom))
+                        return OriginalHook(Twinfang);
+
+                    if (HasEffect(Buffs.SwiftskinsVenom))
+                        return OriginalHook(Twinblood);
+
+                    if (HasEffect(Buffs.FellhuntersVenom))
+                        return OriginalHook(Twinfang);
+
+                    if (HasEffect(Buffs.FellskinsVenom))
+                        return OriginalHook(Twinblood);
+
                 }
                 return actionID;
             }
